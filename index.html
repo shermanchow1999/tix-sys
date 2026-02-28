@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, sans-serif; text-align: center; background: #f0f2f5; margin: 0; padding: 20px; }
+    #reader { width: 100%; max-width: 400px; margin: 20px auto; border-radius: 15px; overflow: hidden; background: white; }
+    #result { padding: 20px; margin: 20px auto; max-width: 360px; border-radius: 12px; font-weight: bold; min-height: 60px; }
+    .success { background: #d4edda; color: #155724; }
+    .error   { background: #f8d7da; color: #721c24; }
+    .warning { background: #fff3cd; color: #856404; }
+    .loading { background: #e2e3e5; color: #383d41; }
+    select { padding: 12px; width: 90%; font-size: 16px; border-radius: 8px; border: 1px solid #ccc; margin-top: 5px; }
+    #startBtn {
+      margin-top: 15px; padding: 14px 32px; font-size: 18px;
+      background: #4CAF50; color: white; border: none;
+      border-radius: 12px; cursor: pointer; width: 90%; max-width: 400px;
+    }
+    #startBtn:disabled { background: #aaa; }
+    #stopBtn {
+      margin-top: 10px; padding: 10px 24px; font-size: 15px;
+      background: #e53935; color: white; border: none;
+      border-radius: 10px; cursor: pointer; display: none;
+    }
+  </style>
+</head>
+<body>
+
+<h3>🎟️ 門票掃描系統</h3>
+
+<div style="margin: 10px auto; max-width: 400px; text-align: left; background: white; padding: 15px; border-radius: 12px;">
+  <label style="font-weight: bold;">🗓️ 當前場次：</label>
+  <select id="showSelector">
+    <option value="02/28 (六) 7:30PM">02/28 (六) 07:30pm</option>
+    <option value="03/01 (日) 2:30PM">03/01 (日) 02:30pm</option>
+    <option value="03/01 (日) 7:30PM">03/01 (日) 07:30pm</option>
+  </select>
+</div>
+
+<button id="startBtn" onclick="startScan()">📷 開啟相機掃描</button>
+<button id="stopBtn"  onclick="stopScan()">⏹ 停止相機</button>
+
+<div id="reader"></div>
+<div id="result" class="loading">請先點擊「開啟相機掃描」</div>
+
+<script>
+  // 💡 REPLACE THIS with your actual Apps Script deployment URL
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbwUWJf_PSSYDJKpKxopCGqK7TcHNQrVgFx95EyNVMJoKIsb6M54Jxijq3ALqloKDgF2/exec";
+
+  let html5QrCode = null;
+  let isProcessing = false;
+
+  function startScan() {
+    const startBtn = document.getElementById("startBtn");
+    const resDiv   = document.getElementById("result");
+
+    startBtn.disabled = true;
+    startBtn.innerText = "⏳ 啟動中...";
+    resDiv.innerText = "正在啟動相機...";
+    resDiv.className = "loading";
+
+    html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onScanSuccess
+    ).then(() => {
+      document.getElementById("startBtn").style.display = "none";
+      document.getElementById("stopBtn").style.display  = "inline-block";
+      resDiv.innerText = "📷 相機已開啟，等待掃描...";
+      resDiv.className = "loading";
+    }).catch(err => {
+      resDiv.innerHTML = "❌ 相機啟動失敗：<br>" + err;
+      resDiv.className = "error";
+      startBtn.disabled = false;
+      startBtn.innerText = "📷 重試開啟相機";
+    });
+  }
+
+  function stopScan() {
+    if (html5QrCode) {
+      html5QrCode.stop().then(() => {
+        document.getElementById("startBtn").style.display = "inline-block";
+        document.getElementById("startBtn").disabled = false;
+        document.getElementById("startBtn").innerText = "📷 重新開啟相機";
+        document.getElementById("stopBtn").style.display = "none";
+        document.getElementById("result").innerText = "相機已停止";
+        document.getElementById("result").className = "loading";
+      });
+    }
+  }
+
+  function onScanSuccess(decodedText) {
+    if (isProcessing) return;
+    isProcessing = true;
+
+    const resDiv       = document.getElementById("result");
+    const selectedShow = document.getElementById("showSelector").value;
+
+    resDiv.innerText = "🔍 核對中: " + decodedText;
+    resDiv.className = "loading";
+
+    // 💡 JSONP call — works cross-origin without CORS issues
+    const callbackName = "cb_" + Date.now();
+    const script = document.createElement("script");
+    script.src = GAS_URL 
+      + "?action=checkIn"
+      + "&id="       + encodeURIComponent(decodedText)
+      + "&show="     + encodeURIComponent(selectedShow)
+      + "&callback=" + callbackName;
+
+    window[callbackName] = function(res) {
+      document.body.removeChild(script);
+      delete window[callbackName];
+
+      if (res.status === "success") {
+        resDiv.innerHTML = "✅ 報到成功！<br>👤 " + res.name;
+        resDiv.className = "success";
+      } else if (res.status === "already") {
+        resDiv.innerHTML = "⚠️ 此人已報到！<br>👤 " + res.name;
+        resDiv.className = "error";
+      } else if (res.status === "wrong_show") {
+        resDiv.innerHTML = res.msg.replace(/\n/g, "<br>");
+        resDiv.className = "warning";
+      } else {
+        resDiv.innerHTML = "❌ " + (res.msg || "無效門票");
+        resDiv.className = "error";
+      }
+
+      setTimeout(() => {
+        isProcessing = false;
+        resDiv.innerText = "等待下一次掃描...";
+        resDiv.className = "loading";
+      }, 4000);
+    };
+
+    script.onerror = function() {
+      resDiv.innerHTML = "❌ 無法連接伺服器";
+      resDiv.className = "error";
+      isProcessing = false;
+    };
+
+    document.body.appendChild(script);
+  }
+</script>
+</body>
+</html>
